@@ -2,13 +2,14 @@ package steam
 
 import (
 	"crypto/sha1"
+	"sync/atomic"
+	"time"
+
 	. "github.com/Philipp15b/go-steam/protocol"
 	. "github.com/Philipp15b/go-steam/protocol/protobuf"
 	. "github.com/Philipp15b/go-steam/protocol/steamlang"
 	. "github.com/Philipp15b/go-steam/steamid"
 	"github.com/golang/protobuf/proto"
-	"sync/atomic"
-	"time"
 )
 
 type Auth struct {
@@ -56,6 +57,18 @@ func (a *Auth) LogOn(details *LogOnDetails) {
 	a.client.Write(NewClientMsgProtobuf(EMsg_ClientLogon, logon))
 }
 
+// LogOnAsGameServer logs in as a gameserver using a login token obtained from https://steamcommunity.com/dev/managegameservers
+// The specific appID the server is running also needs to be provided.
+func (a *Auth) LogOnAsGameServer(gslt string, appID int32) {
+	logon := new(CMsgClientLogon)
+	logon.GameServerToken = proto.String(gslt)
+	logon.GameServerAppId = proto.Int32(appID)
+	logon.ProtocolVersion = proto.Uint32(MsgClientLogon_CurrentProtocol)
+
+	atomic.StoreUint64(&a.client.steamId, uint64(NewIdAdv(0, 0, int32(EUniverse_Public), int32(EAccountType_GameServer))))
+	a.client.Write(NewClientMsgProtobuf(EMsg_ClientLogonGameServer, logon))
+}
+
 func (a *Auth) HandlePacket(packet *Packet) {
 	switch packet.EMsg {
 	case EMsg_ClientLogOnResponse:
@@ -88,7 +101,9 @@ func (a *Auth) handleLogOnResponse(packet *Packet) {
 	if result == EResult_OK {
 		atomic.StoreInt32(&a.client.sessionId, msg.Header.Proto.GetClientSessionid())
 		atomic.StoreUint64(&a.client.steamId, msg.Header.Proto.GetSteamid())
-		a.client.Web.webLoginKey = *body.WebapiAuthenticateUserNonce
+		if body.WebapiAuthenticateUserNonce != nil {
+			a.client.Web.webLoginKey = *body.WebapiAuthenticateUserNonce
+		}
 
 		go a.client.heartbeatLoop(time.Duration(body.GetOutOfGameHeartbeatSeconds()))
 
